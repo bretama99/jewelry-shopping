@@ -1,0 +1,89 @@
+<?php
+// File: app/Http/Requests/CartRequest.php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use App\Models\Product;
+
+class CartRequest extends FormRequest
+{
+    public function authorize()
+    {
+        return true;
+    }
+
+    public function rules()
+    {
+        return [
+            'product_id' => 'required|exists:products,id',
+            'weight' => 'required|numeric|min:0.1|max:1000',
+        ];
+    }
+
+    public function messages()
+    {
+        return [
+            'product_id.required' => 'Please select a product.',
+            'product_id.exists' => 'The selected product does not exist.',
+            'weight.required' => 'Please specify the weight in grams.',
+            'weight.numeric' => 'Weight must be a valid number.',
+            'weight.min' => 'Minimum weight is 0.1 grams.',
+            'weight.max' => 'Maximum weight is 1000 grams.',
+        ];
+    }
+
+    public function withValidator($validator)
+    {
+        $validator->after(function ($validator) {
+            $productId = $this->input('product_id');
+            $weight = $this->input('weight');
+
+            if ($productId && $weight) {
+                $product = Product::find($productId);
+
+                if ($product) {
+                    // Check if weight is within product's allowed range
+                    if ($weight < $product->weight_min) {
+                        $validator->errors()->add('weight',
+                            'Minimum weight for this product is ' . $product->weight_min . ' grams.');
+                    }
+
+                    if ($weight > $product->weight_max) {
+                        $validator->errors()->add('weight',
+                            'Maximum weight for this product is ' . $product->weight_max . ' grams.');
+                    }
+
+                    // Check if product is active
+                    if (!$product->is_active) {
+                        $validator->errors()->add('product_id',
+                            'This product is currently unavailable.');
+                    }
+
+                    // Check stock status (if you implement inventory)
+                    if (isset($product->stock_status) && $product->stock_status === 'out_of_stock') {
+                        $validator->errors()->add('product_id',
+                            'This product is currently out of stock.');
+                    }
+                }
+            }
+        });
+    }
+
+    protected function prepareForValidation()
+    {
+        // Clean up weight input
+        if ($this->has('weight')) {
+            $weight = $this->input('weight');
+            // Remove any non-numeric characters except decimal point
+            $weight = preg_replace('/[^0-9.]/', '', $weight);
+            // Ensure only one decimal point
+            $parts = explode('.', $weight);
+            if (count($parts) > 2) {
+                $weight = $parts[0] . '.' . $parts[1];
+            }
+
+            $this->merge(['weight' => $weight]);
+        }
+    }
+}
