@@ -9,7 +9,7 @@
     <div class="d-sm-flex align-items-center justify-content-between mb-4">
         <div>
             <h1 class="h3 mb-0 text-gray-800">Metal Categories</h1>
-            <p class="mb-0 text-muted">Manage precious metals with live pricing from metals-api.com</p>
+            <p class="mb-0 text-muted">Manage precious metals with live pricing</p>
         </div>
         <div class="d-flex gap-2">
             <button type="button" class="btn btn-outline-success" onclick="refreshAllPrices()">
@@ -22,7 +22,7 @@
     </div>
 
     <!-- Live Price Overview -->
-    <div class="row mb-4">
+    <!-- <div class="row mb-4">
         @foreach($metalCategories as $category)
             <div class="col-xl-3 col-md-6 mb-4">
                 <div class="card border-left-{{ $category->symbol == 'XAU' ? 'warning' : ($category->symbol == 'XAG' ? 'secondary' : 'info') }} shadow h-100">
@@ -35,7 +35,7 @@
                                 <div class="h5 mb-0 font-weight-bold text-gray-800" id="price-{{ $category->symbol }}">
                                     <div class="spinner-border spinner-border-sm" role="status"></div>
                                 </div>
-                                <div class="text-xs text-muted" id="update-{{ $category->symbol }}">Loading from metals-api.com...</div>
+                                <div class="text-xs text-muted" id="update-{{ $category->symbol }}">Loading...</div>
                             </div>
                             <div class="col-auto">
                                 <i class="fas fa-coins fa-2x text-gray-300"></i>
@@ -45,7 +45,7 @@
                 </div>
             </div>
         @endforeach
-    </div>
+    </div> -->
 
     <!-- Metal Categories Table -->
     <div class="card shadow mb-4">
@@ -60,10 +60,11 @@
                             <tr>
                                 <th>Metal</th>
                                 <th>Symbol</th>
-                                <th>Current Price (AUD/oz)</th>
+                                <!-- <th>Current Price (USD/oz)</th> -->
+                                <!-- <th>AUD Exchange Rate</th> -->
                                 <th>Available Karats</th>
                                 <th>Products Count</th>
-                                <th>Last Updated</th>
+                                <!-- <th>Last Updated</th> -->
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -79,32 +80,33 @@
                                         </div>
                                     </td>
                                     <td><span class="badge bg-secondary">{{ $category->symbol }}</span></td>
-                                    <td>
+                                    <!-- <td>
                                         <div id="table-price-{{ $category->symbol }}">
                                             <div class="spinner-border spinner-border-sm" role="status"></div>
                                         </div>
                                     </td>
                                     <td>
+                                        <div id="table-exchange-{{ $category->symbol }}">
+                                            <div class="spinner-border spinner-border-sm" role="status"></div>
+                                        </div>
+                                    </td> -->
+                                    <td>
                                         <div class="small">
                                             @if($category->symbol == 'XAU')
-                                                9K, 10K, 14K, 18K, 21K, 22K, 24K
-                                            @elseif($category->symbol == 'XAG')
-                                                925, 950, 999
-                                            @elseif($category->symbol == 'XPT')
-                                                900, 950, 999
+                                                24K, 22K, 21K, 18K, 14K, 10K
                                             @elseif($category->symbol == 'XPD')
-                                                500, 950, 999
+                                                999, 950, 500
                                             @endif
                                         </div>
                                     </td>
                                     <td>
                                         <span class="badge bg-info">{{ $category->products_count ?? 0 }}</span>
                                     </td>
-                                    <td>
+                                    <!-- <td>
                                         <small class="text-muted" id="table-updated-{{ $category->symbol }}">
                                             {{ $category->updated_at->diffForHumans() }}
                                         </small>
-                                    </td>
+                                    </td> -->
                                     <td>
                                         @if($category->is_active)
                                             <span class="badge bg-success">Active</span>
@@ -184,14 +186,14 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(loadAllLivePrices, 5 * 60 * 1000);
 });
 
-// Function to fetch live prices from metals-api.com and update displays
+// Function to fetch live prices from MetalPriceAPI and update existing displays
 async function loadAllLivePrices() {
-    console.log('Fetching live metal prices from metals-api.com...');
-
+    console.log('Fetching live metal prices for existing categories...');
+    
     try {
-        // Fetch live prices directly in AUD using the new API
-        const response = await fetch('https://metals-api.com/api/latest?access_key=1c70eyqb8hpkqcg8bmtfwalg6u84j20qv9gq8fq7k2h8f6fi9m7p61sxkmng&base=AUD&symbols=XAU%2CXAG%2CXPD%2CXPT');
-
+        // Fetch live prices directly in AUD
+        const response = await fetch('https://api.metalpriceapi.com/v1/latest?api_key=d68f51781cca05150ab380fbea59224c&base=AUD&currencies=XAU,XAG,XPD,XPT');
+        
         if (!response.ok) {
             throw new Error(`API request failed: ${response.status}`);
         }
@@ -202,29 +204,29 @@ async function loadAllLivePrices() {
         if (data.success && data.rates) {
             // Convert troy ounces to grams
             const gramsPerTroyOz = 31.1035;
-
+            
             // Update prices for each symbol that exists in the DOM
             const symbols = ['XAU', 'XAG', 'XPT', 'XPD'];
-
+            
             symbols.forEach(symbol => {
                 const priceElement = document.getElementById(`price-${symbol}`);
                 const tablePriceElement = document.getElementById(`table-price-${symbol}`);
-
+                
                 // Only update if the element exists (metal category exists in database)
                 if (priceElement || tablePriceElement) {
-                    const pricePerOz = data.rates[symbol]; // Already in AUD per troy ounce
+                    const pricePerOz = data.rates[`AUD${symbol}`];
                     const pricePerGram = (pricePerOz / gramsPerTroyOz);
-
+                    
                     const priceData = {
-                        price_aud: `AUD${pricePerOz.toFixed(2)}`,
-                        price_per_gram_aud: `AUD${pricePerGram.toFixed(2)}`,
+                        price_usd: `AUD ${pricePerOz.toFixed(2)}`,
+                        price_per_gram_aud: `AUD ${pricePerGram.toFixed(2)}`,
+                        exchange_rate: '1.00 AUD',
                         last_updated: new Date().toLocaleString(),
-                        success: true,
-                        api_source: 'metals-api.com'
+                        success: true
                     };
-
+                    
                     updatePriceDisplay(symbol, priceData);
-                    console.log(`Updated ${symbol}: ${priceData.price_aud} per oz (${priceData.price_per_gram_aud} per gram)`);
+                    console.log(`Updated ${symbol}: ${priceData.price_usd}`);
                 }
             });
 
@@ -233,9 +235,89 @@ async function loadAllLivePrices() {
         }
 
     } catch (error) {
-        console.error('Error fetching live prices from metals-api.com:', error);
-        showFallbackMessage();
+        console.error('Error fetching live prices:', error);
+        
+        // Try USD base with conversion as fallback
+        try {
+            await loadPricesWithUSDConversion();
+        } catch (fallbackError) {
+            console.error('Fallback also failed:', fallbackError);
+            showFallbackPrices();
+        }
     }
+}
+
+// Fallback method using USD and converting to AUD
+async function loadPricesWithUSDConversion() {
+    console.log('Trying USD base with AUD conversion...');
+    
+    const usdResponse = await fetch('https://api.metalpriceapi.com/v1/latest?api_key=d68f51781cca05150ab380fbea59224c&currencies=XAU,XAG,XPD,XPT');
+    const usdData = await usdResponse.json();
+    
+    if (!usdData.success) {
+        throw new Error('USD API call failed');
+    }
+
+    // Get AUD exchange rate
+    const audResponse = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+    const audData = await audResponse.json();
+    const audRate = audData.rates.AUD || 1.45;
+    
+    console.log('USD to AUD rate:', audRate);
+
+    const gramsPerTroyOz = 31.1035;
+    const symbols = ['XAU', 'XAG', 'XPT', 'XPD'];
+    
+    symbols.forEach(symbol => {
+        const priceElement = document.getElementById(`price-${symbol}`);
+        const tablePriceElement = document.getElementById(`table-price-${symbol}`);
+        
+        // Only update if the element exists (metal category exists in database)
+        if (priceElement || tablePriceElement) {
+            const usdPrice = usdData.rates[`USD${symbol}`];
+            const audPrice = usdPrice * audRate;
+            const pricePerGram = audPrice / gramsPerTroyOz;
+            
+            const priceData = {
+                price_usd: `AUD ${audPrice.toFixed(2)}`,
+                price_per_gram_aud: `AUD ${pricePerGram.toFixed(2)}`,
+                exchange_rate: `${audRate.toFixed(4)} AUD`,
+                last_updated: new Date().toLocaleString(),
+                success: true
+            };
+            
+            updatePriceDisplay(symbol, priceData);
+        }
+    });
+}
+
+// Show fallback prices only for existing categories
+function showFallbackPrices() {
+    console.log('Using fallback prices for existing categories...');
+    
+    const fallbackPrices = {
+        XAU: { price_usd: 'AUD $2,650.00', price_per_gram_aud: 'AUD $85.18' },
+        XAG: { price_usd: 'AUD $31.20', price_per_gram_aud: 'AUD $1.45' },
+        XPT: { price_usd: 'AUD $1,050.00', price_per_gram_aud: 'AUD $48.80' },
+        XPD: { price_usd: 'AUD $1,200.00', price_per_gram_aud: 'AUD $55.77' }
+    };
+
+    Object.keys(fallbackPrices).forEach(symbol => {
+        const priceElement = document.getElementById(`price-${symbol}`);
+        const tablePriceElement = document.getElementById(`table-price-${symbol}`);
+        
+        // Only update if the element exists
+        if (priceElement || tablePriceElement) {
+            const priceData = {
+                ...fallbackPrices[symbol],
+                exchange_rate: '1.45 AUD (Fallback)',
+                last_updated: new Date().toLocaleString() + ' (Fallback)',
+                success: true
+            };
+            
+            updatePriceDisplay(symbol, priceData);
+        }
+    });
 }
 
 function updatePriceDisplay(symbol, priceData) {
@@ -244,11 +326,11 @@ function updatePriceDisplay(symbol, priceData) {
     const updateElement = document.getElementById(`update-${symbol}`);
 
     if (priceElement && priceData.success) {
-        priceElement.innerHTML = priceData.price_aud;
+        priceElement.innerHTML = priceData.price_usd;
         if (updateElement) {
-            updateElement.innerHTML = `Updated: ${priceData.last_updated} (${priceData.api_source})`;
+            updateElement.innerHTML = `Updated: ${priceData.last_updated}`;
         }
-
+        
         // Add flash animation
         priceElement.classList.add('price-flash');
         setTimeout(() => {
@@ -258,44 +340,18 @@ function updatePriceDisplay(symbol, priceData) {
 
     // Update table display
     const tablePriceElement = document.getElementById(`table-price-${symbol}`);
+    const tableExchangeElement = document.getElementById(`table-exchange-${symbol}`);
     const tableUpdatedElement = document.getElementById(`table-updated-${symbol}`);
 
     if (tablePriceElement && priceData.success) {
-        tablePriceElement.innerHTML = `<strong>${priceData.price_aud}</strong><br><small class="text-muted">${priceData.price_per_gram_aud}/gram</small>`;
+        tablePriceElement.innerHTML = `<strong>${priceData.price_usd}</strong><br><small class="text-muted">${priceData.price_per_gram_aud}/gram</small>`;
+        if (tableExchangeElement) {
+            tableExchangeElement.innerHTML = priceData.exchange_rate;
+        }
         if (tableUpdatedElement) {
-            tableUpdatedElement.innerHTML = `${priceData.last_updated}<br><small class="text-success">${priceData.api_source}</small>`;
+            tableUpdatedElement.innerHTML = priceData.last_updated;
         }
     }
-}
-
-function showFallbackMessage() {
-    console.log('Showing fallback message for API failure...');
-
-    const symbols = ['XAU', 'XAG', 'XPT', 'XPD'];
-
-    symbols.forEach(symbol => {
-        const priceElement = document.getElementById(`price-${symbol}`);
-        const tablePriceElement = document.getElementById(`table-price-${symbol}`);
-        const updateElement = document.getElementById(`update-${symbol}`);
-        const tableUpdatedElement = document.getElementById(`table-updated-${symbol}`);
-
-        // Only update if the element exists
-        if (priceElement) {
-            priceElement.innerHTML = '<span class="text-danger">API Error</span>';
-        }
-
-        if (tablePriceElement) {
-            tablePriceElement.innerHTML = '<span class="text-danger">Unable to fetch</span>';
-        }
-
-        if (updateElement) {
-            updateElement.innerHTML = 'metals-api.com unavailable';
-        }
-
-        if (tableUpdatedElement) {
-            tableUpdatedElement.innerHTML = '<span class="text-danger">API Error</span>';
-        }
-    });
 }
 
 function refreshPrice(symbol) {
@@ -310,14 +366,14 @@ function refreshPrice(symbol) {
         .then(priceData => {
             if (priceData.success) {
                 updatePriceDisplay(symbol, priceData);
-                showAlert('success', `${symbol} price refreshed: ${priceData.price_per_gram_aud}/gram from metals-api.com`);
+                showAlert('success', `${symbol} price refreshed: ${priceData.price_per_gram_aud}/gram`);
             } else {
-                showAlert('error', `Failed to refresh ${symbol} price from metals-api.com`);
+                showAlert('error', `Failed to refresh ${symbol} price`);
             }
         })
         .catch(error => {
             console.error('Error refreshing price:', error);
-            showAlert('error', 'Error refreshing price from metals-api.com. Please try again.');
+            showAlert('error', 'Error refreshing price. Please try again.');
         })
         .finally(() => {
             btn.innerHTML = originalContent;
@@ -327,26 +383,26 @@ function refreshPrice(symbol) {
 
 async function refreshIndividualPrice(symbol) {
     try {
-        const response = await fetch(`https://metals-api.com/api/latest?access_key=1c70eyqb8hpkqcg8bmtfwalg6u84j20qv9gq8fq7k2h8f6fi9m7p61sxkmng&base=AUD&symbols=${symbol}`);
+        const response = await fetch(`https://api.metalpriceapi.com/v1/latest?api_key=d68f51781cca05150ab380fbea59224c&base=AUD&currencies=${symbol}`);
         const data = await response.json();
-
-        if (data.success && data.rates && data.rates[symbol]) {
+        
+        if (data.success && data.rates) {
             const gramsPerTroyOz = 31.1035;
-            const pricePerOz = data.rates[symbol]; // Already in AUD
+            const pricePerOz = data.rates[`AUD${symbol}`];
             const pricePerGram = pricePerOz / gramsPerTroyOz;
-
+            
             return {
-                price_aud: `AUD${pricePerOz.toFixed(2)}`,
-                price_per_gram_aud: `AUD${pricePerGram.toFixed(2)}`,
+                price_usd: `AUD ${pricePerOz.toFixed(2)}`,
+                price_per_gram_aud: `AUD ${pricePerGram.toFixed(2)}`,
+                exchange_rate: '1.00 AUD',
                 last_updated: new Date().toLocaleString(),
-                success: true,
-                api_source: 'metals-api.com'
+                success: true
             };
         } else {
-            throw new Error('Invalid response from metals-api.com');
+            throw new Error('Invalid response');
         }
     } catch (error) {
-        console.error(`Error fetching ${symbol} price from metals-api.com:`, error);
+        console.error(`Error fetching ${symbol} price:`, error);
         return { success: false };
     }
 }
@@ -360,11 +416,11 @@ function refreshAllPrices() {
 
     loadAllLivePrices()
         .then(() => {
-            showAlert('success', 'All metal prices refreshed with live market data from metals-api.com!');
+            showAlert('success', 'All metal prices refreshed with live market data!');
         })
         .catch(error => {
             console.error('Error refreshing all prices:', error);
-            showAlert('error', 'Error refreshing prices from metals-api.com. Please try again.');
+            showAlert('error', 'Error refreshing prices. Please try again.');
         })
         .finally(() => {
             btn.innerHTML = originalContent;
@@ -401,9 +457,9 @@ function updateKaratInfo() {
     const symbolSelect = document.getElementById('symbol');
     const karatInfo = document.getElementById('karatInfo');
     const pricePreview = document.getElementById('pricePreview');
-
+    
     if (!symbolSelect) return; // Not on create page
-
+    
     const symbol = symbolSelect.value;
 
     let karatText = '';
@@ -411,15 +467,14 @@ function updateKaratInfo() {
     switch(symbol) {
         case 'XAU':
             karatText = `
-                <h6 class="text-warning mb-2">Gold Karat Options (9K, 10K, 14K, 18K, 21K, 22K, 24K):</h6>
+                <h6 class="text-warning mb-2">Gold Karat Options:</h6>
                 <div class="row g-2 small">
-                    <div class="col-6">9K (37.5% Gold)</div>
-                    <div class="col-6">10K (41.7% Gold)</div>
-                    <div class="col-6">14K (58.3% Gold)</div>
-                    <div class="col-6">18K (75% Gold)</div>
-                    <div class="col-6">21K (87.5% Gold)</div>
-                    <div class="col-6">22K (91.7% Gold)</div>
                     <div class="col-6">24K (99.9% Pure)</div>
+                    <div class="col-6">22K (91.7% Gold)</div>
+                    <div class="col-6">21K (87.5% Gold)</div>
+                    <div class="col-6">18K (75% Gold)</div>
+                    <div class="col-6">14K (58.3% Gold)</div>
+                    <div class="col-6">10K (41.7% Gold)</div>
                 </div>
             `;
             break;
@@ -427,9 +482,10 @@ function updateKaratInfo() {
             karatText = `
                 <h6 class="text-secondary mb-2">Silver Purity Options:</h6>
                 <div class="row g-2 small">
-                    <div class="col-6">925 (Sterling Silver)</div>
-                    <div class="col-6">950 (Higher Grade)</div>
                     <div class="col-6">999 (99.9% Pure)</div>
+                    <div class="col-6">925 (Sterling Silver)</div>
+                    <div class="col-6">900 (Coin Silver)</div>
+                    <div class="col-6">800 (80% Silver)</div>
                 </div>
             `;
             break;
@@ -437,9 +493,10 @@ function updateKaratInfo() {
             karatText = `
                 <h6 class="text-info mb-2">Platinum Purity Options:</h6>
                 <div class="row g-2 small">
-                    <div class="col-6">900 (90% Platinum)</div>
-                    <div class="col-6">950 (95% Platinum)</div>
                     <div class="col-6">999 (99.9% Pure)</div>
+                    <div class="col-6">950 (95% Platinum)</div>
+                    <div class="col-6">900 (90% Platinum)</div>
+                    <div class="col-6">850 (85% Platinum)</div>
                 </div>
             `;
             break;
@@ -447,9 +504,9 @@ function updateKaratInfo() {
             karatText = `
                 <h6 class="text-dark mb-2">Palladium Purity Options:</h6>
                 <div class="row g-2 small">
-                    <div class="col-6">500 (50% Palladium)</div>
-                    <div class="col-6">950 (95% Palladium)</div>
                     <div class="col-6">999 (99.9% Pure)</div>
+                    <div class="col-6">950 (95% Palladium)</div>
+                    <div class="col-6">500 (50% Palladium)</div>
                 </div>
             `;
             break;
@@ -463,19 +520,19 @@ function updateKaratInfo() {
 
     // Load live price preview for create page
     if (symbol && pricePreview) {
-        pricePreview.innerHTML = '<div class="spinner-border" role="status"><span class="visually-hidden">Loading from metals-api.com...</span></div>';
+        pricePreview.innerHTML = '<div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div>';
 
         refreshIndividualPrice(symbol)
             .then(data => {
                 if (data.success) {
                     pricePreview.innerHTML = `
                         <div class="text-center">
-                            <h4 class="text-success mb-1">${data.price_aud}</h4>
-                            <small class="text-muted">AUD per ounce (pure metal)</small>
+                            <h4 class="text-success mb-1">${data.price_usd}</h4>
+                            <small class="text-muted">AUD per ounce</small>
                             <hr>
                             <div class="small">
                                 <div><strong>Price per gram:</strong> ${data.price_per_gram_aud}</div>
-                                <div><strong>Source:</strong> ${data.api_source}</div>
+                                <div><strong>Exchange rate:</strong> ${data.exchange_rate}</div>
                                 <div class="text-muted mt-2">Last updated: ${data.last_updated}</div>
                             </div>
                         </div>
@@ -484,7 +541,7 @@ function updateKaratInfo() {
                     pricePreview.innerHTML = `
                         <div class="text-center text-danger">
                             <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
-                            <p>Unable to fetch current price from metals-api.com</p>
+                            <p>Unable to fetch current price</p>
                             <small>Please try again later</small>
                         </div>
                     `;
@@ -494,14 +551,14 @@ function updateKaratInfo() {
                 pricePreview.innerHTML = `
                     <div class="text-center text-danger">
                         <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
-                        <p>Error loading price from metals-api.com</p>
+                        <p>Error loading price</p>
                     </div>
                 `;
             });
     } else if (pricePreview) {
         pricePreview.innerHTML = `
             <i class="fas fa-coins fa-3x text-muted mb-3"></i>
-            <p class="text-muted">Select a metal symbol to see current market price from metals-api.com</p>
+            <p class="text-muted">Select a metal symbol to see current market price</p>
         `;
     }
 }
@@ -512,7 +569,7 @@ style.textContent = `
     .price-flash {
         animation: priceFlash 1s ease-out;
     }
-
+    
     @keyframes priceFlash {
         0% { background-color: #d4edda; transform: scale(1.05); }
         50% { background-color: #c3e6cb; }
@@ -523,3 +580,4 @@ document.head.appendChild(style);
 
 </script>
 @endsection
+

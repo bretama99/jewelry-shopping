@@ -556,40 +556,4 @@ class SubcategoryController extends Controller
 
         return null;
     }
-
-    public function apiIndex()
-{
-    try {
-        $subcategories = Subcategory::where('is_active', true)
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get()
-            ->map(function ($subcategory) {
-                return [
-                    'id' => $subcategory->id,
-                    'name' => $subcategory->name,
-                    'slug' => $subcategory->slug,
-                    'description' => $subcategory->description,
-                    'default_labor_cost' => $subcategory->default_labor_cost,
-                    'is_active' => $subcategory->is_active,
-                    'sort_order' => $subcategory->sort_order,
-                    'updated_at' => $subcategory->updated_at->toISOString(),
-                ];
-            });
-
-        return response()->json([
-            'success' => true,
-            'data' => $subcategories
-        ]);
-
-    } catch (\Exception $e) {
-        \Log::error('API: Error loading subcategories: ' . $e->getMessage());
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to load subcategories',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
 }

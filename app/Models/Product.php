@@ -249,7 +249,7 @@ class Product extends Model
         if (is_null($this->stock_quantity)) {
             return true; // No stock tracking
         }
-
+        
         if ($this->stock_quantity >= $quantity) {
             $this->decrement('stock_quantity', $quantity);
             return true;
@@ -303,7 +303,50 @@ class Product extends Model
         return $metalCategory ? $metalCategory->getAvailableKarats() : [];
     }
 
-   
+    /**
+     * Get price breakdown for transparency using database prices
+     */
+    public function getPriceBreakdown($customWeight = null)
+    {
+        $weight = $customWeight ?? $this->weight ?? 1.0; // Default weight if not set
+
+        if (!$this->metalCategory) {
+            return null;
+        }
+
+        // Use default karat if not set
+        $karat = $this->karat;
+        if (!$karat) {
+            $availableKarats = $this->metalCategory->getAvailableKarats();
+            $karat = $availableKarats[0] ?? '18'; // Use first available or default
+        }
+
+        $pricePerGram = $this->metalCategory->calculatePricePerGram($karat);
+        $metalValue = $weight * $pricePerGram;
+
+        $laborCost = $this->labor_cost ?? $this->subcategory?->getLaborCostForMetal($this->metal_category_id) ?? 15.00;
+        $totalLaborCost = $weight * $laborCost;
+
+        $baseCost = $metalValue + $totalLaborCost;
+
+        $profitMargin = $this->profit_margin ?? $this->subcategory?->getProfitMarginForMetal($this->metal_category_id) ?? 25.00;
+        $profitAmount = $baseCost * ($profitMargin / 100);
+
+        $finalPrice = $baseCost + $profitAmount;
+
+        return [
+            'weight' => $weight,
+            'price_per_gram' => $pricePerGram,
+            'metal_value' => $metalValue,
+            'labor_cost_per_gram' => $laborCost,
+            'total_labor_cost' => $totalLaborCost,
+            'base_cost' => $baseCost,
+            'profit_margin_percent' => $profitMargin,
+            'profit_amount' => $profitAmount,
+            'final_price' => $finalPrice,
+        ];
+    }
+
     /**
      * Get available karats for this product's metal from database
      */
@@ -348,7 +391,7 @@ class Product extends Model
     {
         try {
             $weight = $customWeight ?? $this->weight ?? 1.0; // Default weight if not set
-
+            
             if (!$this->metalCategory) {
                 return $this->labor_cost ?? 0;
             }
@@ -427,6 +470,10 @@ class Product extends Model
     /**
      * Calculate live price (alias for calculatePrice).
      */
+    public function calculateLivePrice($customWeight = null)
+    {
+        return $this->calculatePrice($customWeight);
+    }
 
     /**
      * Updated validation rules - made many fields optional
@@ -457,77 +504,4 @@ class Product extends Model
             'sort_order' => 'nullable|integer|min:0'
         ];
     }
-
-    public function calculateLivePrice($weight = null, $karat = null)
-{
-    try {
-        $weight = $weight ?? $this->weight ?? 1.0;
-        $karat = $karat ?? $this->karat ?? '18';
-
-        if (!$this->metalCategory) {
-            return 0;
-        }
-
-        $pricePerGram = $this->metalCategory->calculatePricePerGram($karat);
-        $metalValue = $weight * $pricePerGram;
-
-        $laborCost = ($this->labor_cost ?? $this->subcategory?->default_labor_cost ?? 15.00) * $weight;
-        $baseCost = $metalValue + $laborCost;
-
-        $profitMargin = $this->profit_margin ? ($this->profit_margin / 100) : 0.25;
-        $profitAmount = $baseCost * $profitMargin;
-
-        return round($baseCost + $profitAmount, 2);
-
-    } catch (\Exception $e) {
-        \Log::error("Error calculating live price for product {$this->id}: " . $e->getMessage());
-        return 0;
-    }
-}
-
-/**
- * REPLACE the existing getPriceBreakdown method in Product model
- */
-public function getPriceBreakdown($weight = null, $karat = null)
-{
-    try {
-        $weight = $weight ?? $this->weight ?? 1.0;
-        $karat = $karat ?? $this->karat ?? '18';
-
-        if (!$this->metalCategory) {
-            return null;
-        }
-
-        $pricePerGram = $this->metalCategory->calculatePricePerGram($karat);
-        $metalValue = $weight * $pricePerGram;
-
-        $laborCostPerGram = $this->labor_cost ?? $this->subcategory?->default_labor_cost ?? 15.00;
-        $totalLaborCost = $laborCostPerGram * $weight;
-
-        $baseCost = $metalValue + $totalLaborCost;
-
-        $profitMargin = $this->profit_margin ? ($this->profit_margin / 100) : 0.25;
-        $profitAmount = $baseCost * $profitMargin;
-
-        $finalPrice = $baseCost + $profitAmount;
-
-        return [
-            'weight' => $weight,
-            'karat' => $karat,
-            'metal_price_per_gram' => $pricePerGram,
-            'metal_value' => round($metalValue, 2),
-            'labor_cost_per_gram' => $laborCostPerGram,
-            'total_labor_cost' => round($totalLaborCost, 2),
-            'base_cost' => round($baseCost, 2),
-            'profit_margin_rate' => $profitMargin,
-            'profit_amount' => round($profitAmount, 2),
-            'final_price' => round($finalPrice, 2),
-            'price_per_gram' => round($finalPrice / $weight, 2)
-        ];
-
-    } catch (\Exception $e) {
-        \Log::error("Error getting price breakdown for product {$this->id}: " . $e->getMessage());
-        return null;
-    }
-}
 }
