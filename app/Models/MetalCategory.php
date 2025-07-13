@@ -110,38 +110,17 @@ class MetalCategory extends Model
     }
 
     /**
-     * Calculate price per gram for a specific karat/purity
-     */
-    public function calculatePricePerGram($karat)
-    {
-        if (!$this->current_price_usd || !$this->aud_rate) {
-            return 0;
-        }
-
-        $purityRatios = $this->purity_ratios ?? [];
-        $purityRatio = $purityRatios[$karat] ?? 1;
-
-        // Convert troy ounce to grams (1 troy ounce = 31.1035 grams)
-        $gramsPerTroyOz = 31.1035;
-
-        // Calculate: (USD price per troy ounce * AUD rate * purity ratio) / grams per troy ounce
-        $pricePerGram = ($this->current_price_usd * $this->aud_rate * $purityRatio) / $gramsPerTroyOz;
-
-        return round($pricePerGram, 2);
-    }
-
-    /**
      * Get all available karats/purities for this metal
      */
 public function getAvailableKarats()
 {
     $purityRatios = $this->purity_ratios;
-    
+
     // Handle case where purity_ratios might be null, empty, or not properly cast
     if (!is_array($purityRatios)) {
         return [];
     }
-    
+
     return array_keys($purityRatios);
 }
 
@@ -154,11 +133,11 @@ public function getAvailableKarats()
 public function getAllPrices()
 {
     $karats = $this->getAvailableKarats();
-    
+
     if (empty($karats)) {
         return [];
     }
-    
+
     $prices = [];
     foreach ($karats as $karat) {
         $prices[$karat] = $this->calculatePricePerGram($karat);
@@ -389,4 +368,50 @@ public function getAllPrices()
             );
         }
     }
+
+    public function calculatePricePerGram($purity)
+{
+    try {
+        $metalPriceService = app(\App\Services\MetalPriceApiService::class);
+        return $metalPriceService->getMetalPrice($this->symbol, $purity);
+    } catch (\Exception $e) {
+        \Log::error("Error calculating price for {$this->symbol} {$purity}: " . $e->getMessage());
+
+        // Fallback to database calculation if service fails
+        if (!$this->current_price_usd || !$this->aud_rate) {
+            return 0;
+        }
+
+        $purityRatios = $this->purity_ratios ?? [];
+        $purityRatio = $purityRatios[$purity] ?? 1;
+
+        // Convert troy ounce to grams (1 troy ounce = 31.1035 grams)
+        $gramsPerTroyOz = 31.1035;
+
+        // Calculate: (USD price per troy ounce * AUD rate * purity ratio) / grams per troy ounce
+        $pricePerGram = ($this->current_price_usd * $this->aud_rate * $purityRatio) / $gramsPerTroyOz;
+
+        return round($pricePerGram, 2);
+    }
+}
+
+/**
+ * ADD this method to MetalCategory model for API compatibility
+ */
+public function getAvailableKaratsAttribute()
+{
+    return $this->getAvailableKarats();
+}
+
+/**
+ * ADD this method to MetalCategory model for API compatibility
+ */
+public function getPurityRatiosAttribute($value)
+{
+    if (is_string($value)) {
+        return json_decode($value, true);
+    }
+    return $value;
+}
+
 }

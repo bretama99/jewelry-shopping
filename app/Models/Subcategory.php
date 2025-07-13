@@ -214,4 +214,16 @@ class Subcategory extends Model
             'is_active' => $this->is_active
         ];
     }
+    public function getProfitMarginForMetal($metalCategoryId)
+{
+    // Check if there's a specific profit margin override for this metal
+    $metalCategory = $this->metalCategories()->where('metal_categories.id', $metalCategoryId)->first();
+
+    if ($metalCategory && $metalCategory->pivot->profit_margin_override) {
+        return $metalCategory->pivot->profit_margin_override / 100; // Convert percentage to decimal
+    }
+
+    // Return default profit margin (25% default)
+    return 0.25; // 25% default profit margin
+}
 }

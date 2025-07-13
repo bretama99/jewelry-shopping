@@ -72,7 +72,31 @@ return [
             'XPT' => 1075.00, // Platinum ~$1075/oz
         ],
     ],
-
+    'metals_api' => [
+        'key' => env('METALS_API_KEY'),
+        'url' => env('METALS_API_URL', 'https://metals-api.com/api'),
+        'base_currency' => env('METALS_API_BASE_CURRENCY', 'AUD'),
+        'symbols' => env('METALS_API_SYMBOLS', 'XAU,XAG,XPT,XPD'),
+        'timeout' => env('METALS_API_TIMEOUT', 10),
+        'cache_duration' => env('METALS_API_CACHE_DURATION', 300), // 5 minutes
+    ],
+        'trading' => [
+        'default_profit_margin' => env('TRADING_DEFAULT_PROFIT_MARGIN', 0.25),
+        'default_labor_cost' => env('TRADING_DEFAULT_LABOR_COST', 15.00),
+        'scrap_processing_fee' => env('TRADING_SCRAP_PROCESSING_FEE', 0.15),
+        'bullion_sell_premium' => env('TRADING_BULLION_SELL_PREMIUM', 0.08),
+        'bullion_buy_margin' => env('TRADING_BULLION_BUY_MARGIN', 0.05),
+        'price_update_interval' => env('TRADING_PRICE_UPDATE_INTERVAL', 300), // seconds
+        'auto_update_prices' => env('TRADING_AUTO_UPDATE_PRICES', true),
+    ],
+        'company' => [
+        'name' => env('COMPANY_NAME', 'Premium Gold Trading Co.'),
+        'address' => env('COMPANY_ADDRESS', '123 Gold Street, Brisbane QLD 4000'),
+        'phone' => env('COMPANY_PHONE', '+61 7 3123 4567'),
+        'email' => env('COMPANY_EMAIL', 'info@goldtrading.com.au'),
+        'abn' => env('COMPANY_ABN', '12 345 678 901'),
+        'website' => env('COMPANY_WEBSITE', 'https://goldtrading.com.au'),
+    ],
     /*
     |--------------------------------------------------------------------------
     | Currency Exchange API Configuration

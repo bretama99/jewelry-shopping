@@ -678,4 +678,45 @@ class ProductController extends Controller
             ], 500);
         }
     }
+
+    public function apiIndex()
+{
+    try {
+        $products = Product::where('is_active', true)
+            ->with(['metalCategory', 'subcategory'])
+            ->orderBy('name')
+            ->get()
+            ->map(function ($product) {
+                return [
+                    'id' => $product->id,
+                    'name' => $product->name,
+                    'sku' => $product->sku,
+                    'description' => $product->description,
+                    'metal_slug' => $product->metalCategory?->slug,
+                    'subcategory_slug' => $product->subcategory?->slug,
+                    'subcategory_name' => $product->subcategory?->name,
+                    'karat' => $product->karat,
+                    'weight' => $product->weight,
+                    'labor_cost' => $product->labor_cost,
+                    'is_active' => $product->is_active,
+                    'image_url' => $product->image_url,
+                    'updated_at' => $product->updated_at->toISOString(),
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $products
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('API: Error loading products: ' . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to load products',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 }

@@ -5,10 +5,13 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\MetalCategory;
-use App\Models\Subcategory; // ADD THIS IMPORT
+use App\Models\Subcategory;
 use App\Services\MetalPriceApiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -16,11 +19,61 @@ class MetalCategoryController extends Controller
 {
     protected $metalPriceService;
 
+    // Cache key for single API call optimization
+    private const CACHE_KEY = 'admin_metals_api_prices';
+    private const CACHE_DURATION = 300; // 5 minutes
+
     public function __construct(MetalPriceApiService $metalPriceService)
     {
         $this->middleware('auth');
         $this->middleware('admin');
         $this->metalPriceService = $metalPriceService;
+    }
+
+    /**
+     * Get all live metal prices with SINGLE API call and caching (optimized for admin)
+     */
+    private function getLiveMetalPrices()
+    {
+        return Cache::remember(self::CACHE_KEY, self::CACHE_DURATION, function () {
+            try {
+                Log::info('Admin: Making single API call to metals-api.com for all metals');
+
+                $response = Http::timeout(10)
+                    ->get('https://metals-api.com/api/latest', [
+                        'access_key' => '1c70eyqb8hpkqcg8bmtfwalg6u84j20qv9gq8fq7k2h8f6fi9m7p61sxkmng',
+                        'base' => 'AUD',
+                        'symbols' => 'XAU,XAG,XPD,XPT'
+                    ]);
+
+                if (!$response->successful()) {
+                    throw new \Exception('API request failed: ' . $response->status());
+                }
+
+                $data = $response->json();
+                if (!$data['success'] || !isset($data['rates'])) {
+                    throw new \Exception('Invalid API response format');
+                }
+
+                // Store the rates with timestamp
+                $rates = [
+                    'XAU' => $data['rates']['XAU'], // Pure 24K Gold per troy ounce AUD
+                    'XAG' => $data['rates']['XAG'], // Pure 999 Silver per troy ounce AUD
+                    'XPD' => $data['rates']['XPD'], // Pure 999 Palladium per troy ounce AUD
+                    'XPT' => $data['rates']['XPT'], // Pure 999 Platinum per troy ounce AUD
+                    'timestamp' => $data['timestamp'],
+                    'date' => $data['date'],
+                    'fetched_at' => now()->toISOString()
+                ];
+
+                Log::info('Admin: Successfully fetched all metal prices in single API call', $rates);
+                return $rates;
+
+            } catch (\Exception $e) {
+                Log::error('Admin: Failed to fetch metal prices: ' . $e->getMessage());
+                throw $e;
+            }
+        });
     }
 
     /**
@@ -79,8 +132,25 @@ class MetalCategoryController extends Controller
 
             $filters = $request->only(['search', 'status', 'sort']);
 
-            // Get current metal prices from API
-            $currentPrices = $this->metalPriceService->getAllMetalPricesAUD();
+            // Get current metal prices using optimized single API call
+            $currentPrices = [];
+            try {
+                $rates = $this->getLiveMetalPrices();
+                $currentPrices = [
+                    'gold' => $this->calculateAllPricesForMetal('XAU'),
+                    'silver' => $this->calculateAllPricesForMetal('XAG'),
+                    'platinum' => $this->calculateAllPricesForMetal('XPT'),
+                    'palladium' => $this->calculateAllPricesForMetal('XPD'),
+                    'api_info' => [
+                        'timestamp' => $rates['timestamp'],
+                        'date' => $rates['date'],
+                        'fetched_at' => $rates['fetched_at']
+                    ]
+                ];
+            } catch (\Exception $e) {
+                Log::warning('Admin: Failed to get current prices: ' . $e->getMessage());
+                $currentPrices = [];
+            }
 
             return view('admin.metal-categories.index', compact('metalCategories', 'stats', 'filters', 'currentPrices'));
 
@@ -91,14 +161,61 @@ class MetalCategoryController extends Controller
     }
 
     /**
+     * Calculate all prices for a metal using cached data
+     */
+    private function calculateAllPricesForMetal($metalSymbol)
+    {
+        try {
+            $rates = $this->getLiveMetalPrices(); // Uses cache
+
+            if (!isset($rates[$metalSymbol])) {
+                return [];
+            }
+
+            $purePricePerOz = $rates[$metalSymbol];
+            $gramsPerTroyOz = 31.1035;
+            $purePricePerGram = $purePricePerOz / $gramsPerTroyOz;
+            $prices = [];
+
+            // Calculate prices based on metal type
+            if ($metalSymbol === 'XAU') {
+                $goldKarats = [9, 10, 14, 18, 21, 22, 24];
+                foreach ($goldKarats as $karat) {
+                    $purityRatio = $karat / 24;
+                    $prices[(string)$karat] = round($purePricePerGram * $purityRatio, 2);
+                }
+            } elseif ($metalSymbol === 'XAG') {
+                $silverPurities = ['925' => 0.925, '950' => 0.950, '999' => 0.999];
+                foreach ($silverPurities as $purity => $ratio) {
+                    $prices[$purity] = round($purePricePerGram * $ratio, 2);
+                }
+            } elseif ($metalSymbol === 'XPT') {
+                $platinumPurities = ['900' => 0.900, '950' => 0.950, '999' => 0.999];
+                foreach ($platinumPurities as $purity => $ratio) {
+                    $prices[$purity] = round($purePricePerGram * $ratio, 2);
+                }
+            } elseif ($metalSymbol === 'XPD') {
+                $palladiumPurities = ['500' => 0.500, '950' => 0.950, '999' => 0.999];
+                foreach ($palladiumPurities as $purity => $ratio) {
+                    $prices[$purity] = round($purePricePerGram * $ratio, 2);
+                }
+            }
+
+            return $prices;
+        } catch (\Exception $e) {
+            Log::error("Admin: Failed to calculate prices for {$metalSymbol}: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
      * Show the form for creating a new metal category
-     * FIXED: Added subcategories to the view
      */
     public function create()
     {
         // Get all active subcategories for the jewelry types selection
-        $subcategories = Subcategory::active()->ordered()->get();
-        
+        $subcategories = Subcategory::where('is_active', true)->orderBy('name')->get();
+
         return view('admin.metal-categories.create', compact('subcategories'));
     }
 
@@ -113,14 +230,14 @@ class MetalCategoryController extends Controller
             'slug' => 'nullable|string|unique:metal_categories,slug',
             'description' => 'nullable|string|max:1000',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
-            'color' => 'nullable|string|max:7', // Add color validation
+            'color' => 'nullable|string|max:7',
             'is_active' => 'nullable|boolean',
-            'is_precious' => 'nullable|boolean', 
+            'is_precious' => 'nullable|boolean',
             'auto_update_prices' => 'nullable|boolean',
             'meta_title' => 'nullable|string|max:60',
             'meta_description' => 'nullable|string|max:160',
             'sort_order' => 'nullable|integer|min:0',
-            'subcategories' => 'nullable|array', // Add subcategories validation
+            'subcategories' => 'nullable|array',
             'subcategories.*' => 'exists:subcategories,id'
         ]);
 
@@ -142,7 +259,7 @@ class MetalCategoryController extends Controller
                 $data['slug'] = Str::slug($data['name']);
             }
 
-            // Create default purity ratios based on symbol
+            // Create default purity ratios based on symbol with correct karats
             $data['purity_ratios'] = $this->getDefaultPurityRatios($data['symbol']);
 
             $metalCategory = MetalCategory::create($data);
@@ -160,12 +277,11 @@ class MetalCategoryController extends Controller
                 $metalCategory->subcategories()->sync($subcategoryData);
             }
 
-            // Try to fetch initial price
+            // Try to fetch initial price from metals-api.com using cached data
             try {
-                $this->updateMetalPrice($metalCategory);
+                $this->updateMetalPriceFromCache($metalCategory);
             } catch (\Exception $e) {
-                // Price fetch failed, but category was created successfully
-                \Log::warning("Failed to fetch initial price for {$metalCategory->symbol}: " . $e->getMessage());
+                Log::warning("Admin: Failed to fetch initial price for {$metalCategory->symbol}: " . $e->getMessage());
             }
 
             return redirect()->route('admin.metal-categories.index')
@@ -183,146 +299,10 @@ class MetalCategoryController extends Controller
     public function edit(MetalCategory $metalCategory)
     {
         // Get all active subcategories for the jewelry types selection
-        $subcategories = Subcategory::active()->ordered()->get();
-        
+        $subcategories = Subcategory::where('is_active', true)->orderBy('name')->get();
+
         return view('admin.metal-categories.edit', compact('metalCategory', 'subcategories'));
     }
-
-    /**
-     * Get live price for specific metal symbol (AJAX endpoint)
-     */
-    public function getLivePrice($symbol)
-    {
-        try {
-            // Validate symbol
-            if (!in_array($symbol, ['XAU', 'XAG', 'XPT', 'XPD'])) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid metal symbol'
-                ], 400);
-            }
-
-            // Fetch USD price first
-            $usdResponse = file_get_contents("https://api.metalpriceapi.com/v1/latest?api_key=d68f51781cca05150ab380fbea59224c&base=USD&currencies={$symbol}");
-            $usdData = json_decode($usdResponse, true);
-            
-            if (!$usdData['success']) {
-                throw new \Exception('USD API call failed');
-            }
-
-            // Get AUD exchange rate
-            $audResponse = file_get_contents('https://api.exchangerate-api.com/v4/latest/USD');
-            $audData = json_decode($audResponse, true);
-            $audRate = $audData['rates']['AUD'] ?? 1.45;
-            
-            $gramsPerTroyOz = 31.1035;
-            
-            // CORRECT CALCULATION: 1/fraction = USD per ounce
-            $usdFraction = $usdData['rates'][$symbol];
-            $usdPricePerOz = 1 / $usdFraction;
-            $audPricePerOz = $usdPricePerOz * $audRate;
-            $audPricePerGram = $audPricePerOz / $gramsPerTroyOz;
-            
-            return response()->json([
-                'success' => true,
-                'price_usd' => 'AUD $' . number_format($audPricePerOz, 2),
-                'price_per_gram_aud' => 'AUD $' . number_format($audPricePerGram, 2),
-                'exchange_rate' => number_format($audRate, 4) . ' AUD',
-                'last_updated' => now()->format('Y-m-d H:i:s'),
-            ]);
-            
-        } catch (\Exception $e) {
-            \Log::error("Error fetching live price for {$symbol}: " . $e->getMessage());
-            
-            // Return fallback prices
-            $fallbackPrices = [
-                'XAU' => ['ounce' => 3825.00, 'gram' => 154.50],
-                'XAG' => ['ounce' => 45.20, 'gram' => 1.45],
-                'XPT' => ['ounce' => 1520.00, 'gram' => 48.80],
-                'XPD' => ['ounce' => 1735.00, 'gram' => 55.77]
-            ];
-            
-            $fallback = $fallbackPrices[$symbol] ?? ['ounce' => 0, 'gram' => 0];
-            
-            return response()->json([
-                'success' => true,
-                'price_usd' => 'AUD $' . number_format($fallback['ounce'], 2),
-                'price_per_gram_aud' => 'AUD $' . number_format($fallback['gram'], 2),
-                'exchange_rate' => '1.45 AUD (Fallback)',
-                'last_updated' => now()->format('Y-m-d H:i:s') . ' (Fallback)',
-            ]);
-        }
-    }
-
-    /**
-     * Get default purity ratios based on metal symbol
-     */
-    private function getDefaultPurityRatios($symbol)
-    {
-        $defaults = [
-            'XAU' => [ // Gold
-                '24' => 1.0,    // 24K = 100%
-                '22' => 0.917,  // 22K = 91.7%
-                '21' => 0.875,  // 21K = 87.5%
-                '18' => 0.75,   // 18K = 75%
-                '14' => 0.583,  // 14K = 58.3%
-                '10' => 0.417   // 10K = 41.7%
-            ],
-            'XAG' => [ // Silver
-                '999' => 0.999, // Fine silver
-                '925' => 0.925, // Sterling silver
-                '900' => 0.900, // Coin silver
-                '800' => 0.800  // European silver
-            ],
-            'XPT' => [ // Platinum
-                '999' => 0.999,
-                '950' => 0.950,
-                '900' => 0.900,
-                '850' => 0.850
-            ],
-            'XPD' => [ // Palladium
-                '999' => 0.999,
-                '950' => 0.950,
-                '500' => 0.500
-            ]
-        ];
-
-        return json_encode($defaults[$symbol] ?? []);
-    }
-
-    /**
-     * Update metal price from API
-     */
-    private function updateMetalPrice(MetalCategory $metalCategory)
-    {
-        try {
-            $response = file_get_contents("https://api.metalpriceapi.com/v1/latest?api_key=d68f51781cca05150ab380fbea59224c&base=USD&currencies={$metalCategory->symbol}");
-            $data = json_decode($response, true);
-            
-            if ($data['success'] && isset($data['rates'][$metalCategory->symbol])) {
-                // Get AUD rate
-                $audResponse = file_get_contents('https://api.exchangerate-api.com/v4/latest/USD');
-                $audData = json_decode($audResponse, true);
-                $audRate = $audData['rates']['AUD'] ?? 1.45;
-                
-                // Calculate USD price per ounce (correct calculation)
-                $usdFraction = $data['rates'][$metalCategory->symbol];
-                $usdPricePerOz = 1 / $usdFraction;
-                
-                // Update the metal category
-                $metalCategory->update([
-                    'current_price_usd' => $usdPricePerOz,
-                    'aud_rate' => $audRate,
-                    'price_updated_at' => now()
-                ]);
-            }
-        } catch (\Exception $e) {
-            \Log::error("Failed to update price for {$metalCategory->symbol}: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    // ... (rest of your existing methods remain the same)
 
     /**
      * Display the specified metal category
@@ -330,16 +310,13 @@ class MetalCategoryController extends Controller
     public function show(MetalCategory $metalCategory)
     {
         $metalCategory->load(['subcategories', 'products' => function ($query) {
-            $query->active()->orderBy('name')->take(10);
+            $query->where('is_active', true)->orderBy('name')->take(10);
         }]);
 
-        // Get current prices for all karats/purities
-        $currentPrices = $metalCategory->getAllPrices();
+        // Get current prices for all karats/purities using cached data
+        $currentPrices = $this->calculateAllPricesForMetal($metalCategory->symbol);
 
-        // Get price history (if you have a price history table)
-        $priceHistory = []; // Implement price history if needed
-
-        return view('admin.metal-categories.show', compact('metalCategory', 'currentPrices', 'priceHistory'));
+        return view('admin.metal-categories.show', compact('metalCategory', 'currentPrices'));
     }
 
     /**
@@ -355,7 +332,7 @@ class MetalCategoryController extends Controller
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
             'color' => 'nullable|string|max:7',
             'is_active' => 'nullable|boolean',
-            'is_precious' => 'nullable|boolean', 
+            'is_precious' => 'nullable|boolean',
             'auto_update_prices' => 'nullable|boolean',
             'meta_title' => 'nullable|string|max:60',
             'meta_description' => 'nullable|string|max:160',
@@ -457,6 +434,52 @@ class MetalCategoryController extends Controller
     }
 
     /**
+     * Get live price for specific metal symbol using cached data (AJAX endpoint)
+     */
+    public function getLivePrice($symbol)
+    {
+        try {
+            // Validate symbol
+            if (!in_array($symbol, ['XAU', 'XAG', 'XPT', 'XPD'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid metal symbol'
+                ], 400);
+            }
+
+            // Get price from cached data - no direct API call
+            $rates = $this->getLiveMetalPrices();
+
+            if (!isset($rates[$symbol])) {
+                throw new \Exception('Metal price not available in cache');
+            }
+
+            $gramsPerTroyOz = 31.1035;
+            $audPricePerOz = $rates[$symbol];
+            $audPricePerGram = $audPricePerOz / $gramsPerTroyOz;
+
+            return response()->json([
+                'success' => true,
+                'price_usd' => 'AUD$' . number_format($audPricePerOz, 2),
+                'price_per_gram_aud' => 'AUD$' . number_format($audPricePerGram, 2),
+                'exchange_rate' => '1.00 AUD (Direct)',
+                'last_updated' => $rates['fetched_at'],
+                'api_source' => 'metals-api.com (cached)',
+                'api_timestamp' => $rates['timestamp']
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("Admin: Error fetching live price for {$symbol}: " . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error fetching live price from cache',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Toggle metal category status
      */
     public function toggleStatus(MetalCategory $metalCategory)
@@ -479,6 +502,98 @@ class MetalCategoryController extends Controller
             }
 
             return back()->with('error', 'Error updating status.');
+        }
+    }
+
+    /**
+     * Update price for specific metal category using cached data
+     */
+    public function updatePrice(Request $request, MetalCategory $metalCategory)
+    {
+        $request->validate([
+            'price_aud' => 'required|numeric|min:0',
+        ]);
+
+        try {
+            $metalCategory->update([
+                'current_price_usd' => $request->price_aud, // Store AUD price (keeping field name for compatibility)
+                'aud_rate' => 1.0, // Always 1.0 since we work in AUD
+                'price_updated_at' => now()
+            ]);
+
+            // Get new calculated prices
+            $newPrices = $this->calculateAllPricesForMetal($metalCategory->symbol);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Price updated successfully.',
+                'new_prices' => $newPrices
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error updating price: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Update all metal prices using cached data
+     */
+    public function updateAllPrices()
+    {
+        try {
+            // Clear cache to force fresh API call
+            Cache::forget(self::CACHE_KEY);
+
+            $rates = $this->getLiveMetalPrices(); // This will make a fresh API call
+            $updateCount = 0;
+
+            $metalCategories = MetalCategory::where('auto_update_prices', true)->get();
+
+            foreach ($metalCategories as $metalCategory) {
+                try {
+                    $this->updateMetalPriceFromCache($metalCategory);
+                    $updateCount++;
+                } catch (\Exception $e) {
+                    Log::error("Admin: Failed to update price for {$metalCategory->symbol}: " . $e->getMessage());
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Updated prices for {$updateCount} metal categories using single API call.",
+                'api_timestamp' => $rates['timestamp'],
+                'fetched_at' => $rates['fetched_at']
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error updating prices: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Update metal price from cached data (optimized)
+     */
+    private function updateMetalPriceFromCache(MetalCategory $metalCategory)
+    {
+        try {
+            $rates = $this->getLiveMetalPrices();
+
+            if (isset($rates[$metalCategory->symbol])) {
+                $audPricePerOz = $rates[$metalCategory->symbol];
+
+                $metalCategory->update([
+                    'current_price_usd' => $audPricePerOz, // Store as AUD (keeping field name for compatibility)
+                    'aud_rate' => 1.0, // Always 1.0 since we get AUD directly
+                    'price_updated_at' => now()
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error("Admin: Failed to update price for {$metalCategory->symbol} from cache: " . $e->getMessage());
+            throw $e;
         }
     }
 
@@ -507,9 +622,9 @@ class MetalCategoryController extends Controller
             $subcategoryData = [];
             foreach ($metalCategory->subcategories as $subcategory) {
                 $subcategoryData[$subcategory->id] = [
-                    'labor_cost_override' => $subcategory->pivot->labor_cost_override,
-                    'profit_margin_override' => $subcategory->pivot->profit_margin_override,
-                    'is_available' => $subcategory->pivot->is_available,
+                    'labor_cost_override' => $subcategory->pivot->labor_cost_override ?? null,
+                    'profit_margin_override' => $subcategory->pivot->profit_margin_override ?? null,
+                    'is_available' => $subcategory->pivot->is_available ?? true,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ];
@@ -536,66 +651,6 @@ class MetalCategoryController extends Controller
     }
 
     /**
-     * Update price for specific metal category
-     */
-    public function updatePrice(Request $request, MetalCategory $metalCategory)
-    {
-        $request->validate([
-            'price_usd' => 'required|numeric|min:0',
-            'aud_rate' => 'nullable|numeric|min:0',
-        ]);
-
-        try {
-            $metalCategory->update([
-                'current_price_usd' => $request->price_usd,
-                'aud_rate' => $request->aud_rate ?? 1.45,
-                'price_updated_at' => now()
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Price updated successfully.',
-                'new_prices' => $metalCategory->getAllPrices()
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error updating price: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Update all metal prices from API
-     */
-    public function updateAllPrices()
-    {
-        try {
-            $updateCount = 0;
-            $metalCategories = MetalCategory::where('auto_update_prices', true)->get();
-            
-            foreach ($metalCategories as $metalCategory) {
-                try {
-                    $this->updateMetalPrice($metalCategory);
-                    $updateCount++;
-                } catch (\Exception $e) {
-                    \Log::error("Failed to update price for {$metalCategory->symbol}: " . $e->getMessage());
-                }
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => "Updated prices for {$updateCount} metal categories."
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error updating prices: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
      * Bulk actions
      */
     public function bulkAction(Request $request)
@@ -618,7 +673,7 @@ class MetalCategoryController extends Controller
                     break;
                 case 'update_prices':
                     foreach ($metalCategories->get() as $metalCategory) {
-                        $this->updateMetalPrice($metalCategory);
+                        $this->updateMetalPriceFromCache($metalCategory);
                     }
                     break;
                 default:
@@ -663,12 +718,24 @@ class MetalCategoryController extends Controller
                 // Add CSV headers
                 fputcsv($handle, [
                     'ID', 'Name', 'Symbol', 'Slug', 'Description', 'Status',
-                    'Current Price USD', 'AUD Rate', 'Products Count', 'Subcategories Count',
-                    'Sort Order', 'Created At', 'Updated At'
+                    'Current Price AUD', 'Products Count', 'Subcategories Count',
+                    'Available Karats/Purities', 'Sort Order', 'Created At', 'Updated At'
                 ]);
 
                 // Add data rows
                 foreach ($metalCategories as $metalCategory) {
+                    // Get available karats/purities
+                    $availableKarats = '';
+                    if ($metalCategory->symbol === 'XAU') {
+                        $availableKarats = '9K, 10K, 14K, 18K, 21K, 22K, 24K';
+                    } elseif ($metalCategory->symbol === 'XAG') {
+                        $availableKarats = '925, 950, 999';
+                    } elseif ($metalCategory->symbol === 'XPT') {
+                        $availableKarats = '900, 950, 999';
+                    } elseif ($metalCategory->symbol === 'XPD') {
+                        $availableKarats = '500, 950, 999';
+                    }
+
                     fputcsv($handle, [
                         $metalCategory->id,
                         $metalCategory->name,
@@ -676,10 +743,10 @@ class MetalCategoryController extends Controller
                         $metalCategory->slug,
                         $metalCategory->description,
                         $metalCategory->is_active ? 'Active' : 'Inactive',
-                        $metalCategory->current_price_usd,
-                        $metalCategory->aud_rate,
+                        $metalCategory->current_price_usd, // Actually AUD
                         $metalCategory->products->count(),
                         $metalCategory->subcategories->count(),
+                        $availableKarats,
                         $metalCategory->sort_order,
                         $metalCategory->created_at->format('Y-m-d H:i:s'),
                         $metalCategory->updated_at->format('Y-m-d H:i:s'),
@@ -692,6 +759,41 @@ class MetalCategoryController extends Controller
         } catch (\Exception $e) {
             return back()->with('error', 'Failed to export metal categories: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Get default purity ratios based on metal symbol with correct karats
+     */
+    private function getDefaultPurityRatios($symbol)
+    {
+        $defaults = [
+            'XAU' => [ // Gold with correct karats: 9K, 10K, 14K, 18K, 21K, 22K, 24K
+                '9' => 0.375,   // 9K = 37.5%
+                '10' => 0.417,  // 10K = 41.7%
+                '14' => 0.583,  // 14K = 58.3%
+                '18' => 0.75,   // 18K = 75%
+                '21' => 0.875,  // 21K = 87.5%
+                '22' => 0.917,  // 22K = 91.7%
+                '24' => 1.0     // 24K = 100%
+            ],
+            'XAG' => [ // Silver
+                '925' => 0.925, // Sterling silver
+                '950' => 0.950, // Higher grade silver
+                '999' => 0.999  // Fine silver
+            ],
+            'XPT' => [ // Platinum
+                '900' => 0.900,
+                '950' => 0.950,
+                '999' => 0.999
+            ],
+            'XPD' => [ // Palladium
+                '500' => 0.500,
+                '950' => 0.950,
+                '999' => 0.999
+            ]
+        ];
+
+        return json_encode($defaults[$symbol] ?? []);
     }
 
     /**
@@ -750,4 +852,168 @@ class MetalCategoryController extends Controller
 
         return null;
     }
+
+    public function apiIndex()
+{
+    try {
+        $metalCategories = MetalCategory::where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get()
+            ->map(function ($category) {
+                return [
+                    'id' => $category->id,
+                    'name' => $category->name,
+                    'slug' => $category->slug,
+                    'symbol' => $category->symbol,
+                    'description' => $category->description,
+                    'is_active' => $category->is_active,
+                    'sort_order' => $category->sort_order,
+                    'available_karats' => $this->getAvailableKaratsForMetal($category->symbol),
+                    'available_purities' => $this->getAvailableKaratsForMetal($category->symbol),
+                    'purity_ratios' => $this->getPurityRatiosForMetal($category->symbol),
+                    'updated_at' => $category->updated_at->toISOString(),
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $metalCategories
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('API: Error loading metal categories: ' . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to load metal categories',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Get available karats for metal - ADD THIS METHOD
+ */
+private function getAvailableKaratsForMetal($symbol)
+{
+    switch ($symbol) {
+        case 'XAU': return ['9', '10', '14', '18', '21', '22', '24'];
+        case 'XAG': return ['925', '950', '999'];
+        case 'XPT': return ['900', '950', '999'];
+        case 'XPD': return ['500', '950', '999'];
+        default: return [];
+    }
+}
+
+/**
+ * Get purity ratios for metal - ADD THIS METHOD
+ */
+private function getPurityRatiosForMetal($symbol)
+{
+    switch ($symbol) {
+        case 'XAU': return ['9' => 0.375, '10' => 0.417, '14' => 0.583, '18' => 0.75, '21' => 0.875, '22' => 0.917, '24' => 1.0];
+        case 'XAG': return ['925' => 0.925, '950' => 0.950, '999' => 0.999];
+        case 'XPT': return ['900' => 0.900, '950' => 0.950, '999' => 0.999];
+        case 'XPD': return ['500' => 0.500, '950' => 0.950, '999' => 0.999];
+        default: return [];
+    }
+}
+
+
+public function getScrapMargins($metalSlug)
+{
+    try {
+        // Default scrap margins by metal and purity
+        $defaultMargins = [
+            'gold' => [
+                '9' => 0.20,   // 20% margin for 9K gold
+                '10' => 0.18,  // 18% margin for 10K gold
+                '14' => 0.15,  // 15% margin for 14K gold
+                '18' => 0.12,  // 12% margin for 18K gold
+                '21' => 0.10,  // 10% margin for 21K gold
+                '22' => 0.08,  // 8% margin for 22K gold
+                '24' => 0.05   // 5% margin for 24K gold
+            ],
+            'silver' => [
+                '925' => 0.25, // 25% margin for sterling silver
+                '950' => 0.20, // 20% margin for 950 silver
+                '999' => 0.15  // 15% margin for fine silver
+            ],
+            'platinum' => [
+                '900' => 0.20, // 20% margin for 900 platinum
+                '950' => 0.15, // 15% margin for 950 platinum
+                '999' => 0.10  // 10% margin for fine platinum
+            ],
+            'palladium' => [
+                '500' => 0.30, // 30% margin for 500 palladium
+                '950' => 0.20, // 20% margin for 950 palladium
+                '999' => 0.15  // 15% margin for fine palladium
+            ]
+        ];
+
+        return response()->json([
+            'success' => true,
+            'margins' => $defaultMargins[$metalSlug] ?? []
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Error fetching scrap margins',
+            'margins' => []
+        ], 500);
+    }
+}
+
+public function getBullionPremium($metalSlug)
+{
+    try {
+        // Default bullion sell premiums by metal
+        $defaultPremiums = [
+            'gold' => 0.08,      // 8% premium for gold bullion
+            'silver' => 0.12,    // 12% premium for silver bullion
+            'platinum' => 0.10,  // 10% premium for platinum bullion
+            'palladium' => 0.15  // 15% premium for palladium bullion
+        ];
+
+        return response()->json([
+            'success' => true,
+            'sell_premium' => $defaultPremiums[$metalSlug] ?? 0.08
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Error fetching bullion premium',
+            'sell_premium' => 0.08
+        ], 500);
+    }
+}
+
+public function getBullionMargin($metalSlug)
+{
+    try {
+        // Default bullion buy margins by metal
+        $defaultMargins = [
+            'gold' => 0.05,      // 5% margin for gold bullion
+            'silver' => 0.08,    // 8% margin for silver bullion
+            'platinum' => 0.06,  // 6% margin for platinum bullion
+            'palladium' => 0.10  // 10% margin for palladium bullion
+        ];
+
+        return response()->json([
+            'success' => true,
+            'buy_margin' => $defaultMargins[$metalSlug] ?? 0.05
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Error fetching bullion margin',
+            'buy_margin' => 0.05
+        ], 500);
+    }
+}
+
 }

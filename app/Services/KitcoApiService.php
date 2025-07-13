@@ -1,5 +1,5 @@
 <?php
-// File: app/Services/KitcoApiService.php (Updated to use MetalPriceAPI)
+// File: app/Services/KitcoApiService.php (Updated to use metals-api.com)
 
 namespace App\Services;
 
@@ -13,30 +13,24 @@ class KitcoApiService
     protected $apiUrl;
     protected $cacheKey = 'metal_prices';
     protected $cacheDuration = 300; // 5 minutes
-    protected $fallbackPrices = [
-        'XAU' => 2000, // Gold fallback price in USD per ounce
-        'XAG' => 25,   // Silver fallback price in USD per ounce
-        'XPD' => 1000, // Palladium fallback price in USD per ounce
-        'XPT' => 1050  // Platinum fallback price in USD per ounce
-    ];
 
     public function __construct()
     {
-        $this->apiKey = 'd68f51781cca05150ab380fbea59224c';
-        $this->apiUrl = 'https://api.metalpriceapi.com/v1';
+        $this->apiKey = '1c70eyqb8hpkqcg8bmtfwalg6u84j20qv9gq8fq7k2h8f6fi9m7p61sxkmng';
+        $this->apiUrl = 'https://metals-api.com/api';
     }
 
     /**
-     * Get current metal prices from MetalPriceAPI
+     * Get current metal prices from metals-api.com
      */
     public function getCurrentMetalPrices()
     {
         return Cache::remember($this->cacheKey . '_current', $this->cacheDuration, function () {
             try {
                 $response = Http::timeout(10)->get($this->apiUrl . '/latest', [
-                    'api_key' => $this->apiKey,
-                    'base' => 'USD',
-                    'currencies' => 'XAU,XAG,XPD,XPT'
+                    'access_key' => $this->apiKey,
+                    'base' => 'AUD',
+                    'symbols' => 'XAU,XAG,XPD,XPT'
                 ]);
 
                 if (!$response->successful()) {
@@ -49,13 +43,14 @@ class KitcoApiService
                     throw new \Exception("Invalid API response format");
                 }
 
-                // Convert API rates to prices per troy ounce in USD
+                // Store pure metal prices per troy ounce in AUD
                 $prices = [
-                    'XAU' => isset($data['rates']['USDXAU']) ? (1 / $data['rates']['USDXAU']) : $this->fallbackPrices['XAU'],
-                    'XAG' => isset($data['rates']['USDXAG']) ? (1 / $data['rates']['USDXAG']) : $this->fallbackPrices['XAG'],
-                    'XPD' => isset($data['rates']['USDXPD']) ? (1 / $data['rates']['USDXPD']) : $this->fallbackPrices['XPD'],
-                    'XPT' => isset($data['rates']['USDXPT']) ? (1 / $data['rates']['USDXPT']) : $this->fallbackPrices['XPT'],
+                    'XAU' => $data['rates']['XAU'], // Pure 24K Gold per troy ounce AUD
+                    'XAG' => $data['rates']['XAG'], // Pure 999 Silver per troy ounce AUD
+                    'XPD' => $data['rates']['XPD'], // Pure 999 Palladium per troy ounce AUD
+                    'XPT' => $data['rates']['XPT'], // Pure 999 Platinum per troy ounce AUD
                     'timestamp' => $data['timestamp'],
+                    'date' => $data['date'],
                     'last_updated' => now()->toISOString()
                 ];
 
@@ -63,13 +58,13 @@ class KitcoApiService
 
             } catch (\Exception $e) {
                 Log::warning('Metal price API failed: ' . $e->getMessage());
-                return $this->getFallbackPrices();
+                throw $e; // Don't use fallback - force real API data
             }
         });
     }
 
     /**
-     * Get current gold price in USD per ounce
+     * Get current gold price in AUD per ounce (pure 24K)
      */
     public function getCurrentGoldPrice()
     {
@@ -78,50 +73,27 @@ class KitcoApiService
     }
 
     /**
-     * Get fallback prices when API is unavailable
-     */
-    protected function getFallbackPrices()
-    {
-        // Return fallback prices with small time-based variation
-        $variation = sin(time() / 3600) * 50; // Small hourly variation
-
-        return [
-            'XAU' => round($this->fallbackPrices['XAU'] + $variation, 2),
-            'XAG' => round($this->fallbackPrices['XAG'] + ($variation * 0.01), 2),
-            'XPD' => round($this->fallbackPrices['XPD'] + ($variation * 0.5), 2),
-            'XPT' => round($this->fallbackPrices['XPT'] + ($variation * 0.5), 2),
-            'timestamp' => time(),
-            'last_updated' => now()->toISOString(),
-            'fallback' => true
-        ];
-    }
-
-    /**
      * Calculate gold prices for all karats in AUD per gram
      */
     public function getCurrentPrices()
     {
         $metalPrices = $this->getCurrentMetalPrices();
-        $goldPricePerOz = $metalPrices['XAU'];
-        $audRate = $this->getAudRate();
+        $goldPricePerOz = $metalPrices['XAU']; // Pure 24K gold per troy ounce AUD
         $gramsPerTroyOz = 31.1035;
 
         // Convert to AUD per gram for 24K
-        $goldPricePerGramAud = ($goldPricePerOz * $audRate) / $gramsPerTroyOz;
+        $goldPricePerGramAud = $goldPricePerOz / $gramsPerTroyOz;
 
-        // Calculate prices for all karats using: Price(karat) = Price(24K) × (karat/24)
-        return [
-            '9' => round($goldPricePerGramAud * (9/24), 2),
-            '10' => round($goldPricePerGramAud * (10/24), 2),
-            '14' => round($goldPricePerGramAud * (14/24), 2),
-            '18' => round($goldPricePerGramAud * (18/24), 2),
-            '19' => round($goldPricePerGramAud * (19/24), 2),
-            '20' => round($goldPricePerGramAud * (20/24), 2),
-            '21' => round($goldPricePerGramAud * (21/24), 2),
-            '22' => round($goldPricePerGramAud * (22/24), 2),
-            '23' => round($goldPricePerGramAud * (23/24), 2),
-            '24' => round($goldPricePerGramAud * (24/24), 2),
-        ];
+        // Calculate prices for all karats: Price(karat) = Price(24K) × (karat/24)
+        $availableKarats = ['9', '10', '14', '18', '21', '22', '24'];
+        $karatPrices = [];
+
+        foreach ($availableKarats as $karat) {
+            $purityRatio = (int)$karat / 24;
+            $karatPrices[$karat] = round($goldPricePerGramAud * $purityRatio, 2);
+        }
+
+        return $karatPrices;
     }
 
     /**
@@ -130,7 +102,6 @@ class KitcoApiService
     public function getAllMetalPricesAUD()
     {
         $metalPrices = $this->getCurrentMetalPrices();
-        $audRate = $this->getAudRate();
         $gramsPerTroyOz = 31.1035;
 
         $result = [
@@ -138,27 +109,33 @@ class KitcoApiService
             'silver' => [],
             'palladium' => [],
             'platinum' => [],
-            'last_updated' => $metalPrices['last_updated']
+            'last_updated' => $metalPrices['last_updated'],
+            'api_timestamp' => $metalPrices['timestamp'],
+            'api_date' => $metalPrices['date']
         ];
 
-        // Gold karats
-        $goldPricePerGramAud = ($metalPrices['XAU'] * $audRate) / $gramsPerTroyOz;
-        for ($karat = 9; $karat <= 24; $karat++) {
-            $result['gold'][(string)$karat] = round($goldPricePerGramAud * ($karat/24), 2);
+        // Gold karats (9K, 10K, 14K, 18K, 21K, 22K, 24K)
+        $goldPricePerGramAud = $metalPrices['XAU'] / $gramsPerTroyOz;
+        $goldKarats = [9, 10, 14, 18, 21, 22, 24];
+        foreach ($goldKarats as $karat) {
+            $purityRatio = $karat / 24;
+            $result['gold'][(string)$karat] = round($goldPricePerGramAud * $purityRatio, 2);
         }
 
         // Silver purities
-        $silverPricePerGramAud = ($metalPrices['XAG'] * $audRate) / $gramsPerTroyOz;
+        $silverPricePerGramAud = $metalPrices['XAG'] / $gramsPerTroyOz;
         $result['silver']['925'] = round($silverPricePerGramAud * 0.925, 2);
         $result['silver']['950'] = round($silverPricePerGramAud * 0.950, 2);
         $result['silver']['999'] = round($silverPricePerGramAud * 0.999, 2);
 
-        // Palladium and Platinum
-        $palladiumPricePerGramAud = ($metalPrices['XPD'] * $audRate) / $gramsPerTroyOz;
+        // Palladium purities
+        $palladiumPricePerGramAud = $metalPrices['XPD'] / $gramsPerTroyOz;
+        $result['palladium']['500'] = round($palladiumPricePerGramAud * 0.500, 2);
         $result['palladium']['950'] = round($palladiumPricePerGramAud * 0.950, 2);
         $result['palladium']['999'] = round($palladiumPricePerGramAud * 0.999, 2);
 
-        $platinumPricePerGramAud = ($metalPrices['XPT'] * $audRate) / $gramsPerTroyOz;
+        // Platinum purities
+        $platinumPricePerGramAud = $metalPrices['XPT'] / $gramsPerTroyOz;
         $result['platinum']['900'] = round($platinumPricePerGramAud * 0.900, 2);
         $result['platinum']['950'] = round($platinumPricePerGramAud * 0.950, 2);
         $result['platinum']['999'] = round($platinumPricePerGramAud * 0.999, 2);
@@ -167,23 +144,48 @@ class KitcoApiService
     }
 
     /**
-     * Get AUD/USD exchange rate
+     * Calculate price per gram for specific karat
      */
-    protected function getAudRate()
+    public function calculatePricePerGram($karat)
     {
-        return Cache::remember('usd_aud_rate', 3600, function () {
-            try {
-                $response = Http::timeout(10)->get('https://api.exchangerate-api.com/v4/latest/USD');
-                if ($response->successful()) {
-                    $data = $response->json();
-                    return $data['rates']['AUD'] ?? 1.45; // Fallback rate
-                }
-                return 1.45; // Fallback USD to AUD rate
-            } catch (\Exception $e) {
-                Log::warning('Currency conversion failed: ' . $e->getMessage());
-                return 1.45; // Fallback rate
-            }
-        });
+        $goldPricePerOz = $this->getCurrentGoldPrice();
+        $gramsPerTroyOz = 31.1035;
+
+        // Convert to AUD per gram for 24K
+        $goldPricePerGramAud = $goldPricePerOz / $gramsPerTroyOz;
+
+        // Extract numeric karat value
+        $karatValue = is_string($karat) ? (int)str_replace('K', '', $karat) : (int)$karat;
+
+        // Calculate price for given karat: Price(karat) = Price(24K) × (karat/24)
+        return round($goldPricePerGramAud * ($karatValue/24), 2);
+    }
+
+    /**
+     * Get price in AUD (already in AUD from API)
+     */
+    public function getCurrentGoldPriceAUD()
+    {
+        return $this->getCurrentGoldPrice();
+    }
+
+    /**
+     * No conversion needed - already in AUD
+     */
+    public function convertToAUD($audAmount)
+    {
+        return $audAmount;
+    }
+
+    /**
+     * Refresh prices (force update)
+     */
+    public function refreshPrice()
+    {
+        Cache::forget($this->cacheKey . '_current');
+        Cache::forget($this->cacheKey . '_market_data');
+
+        return $this->getCurrentGoldPrice();
     }
 
     /**
@@ -197,15 +199,15 @@ class KitcoApiService
                 $isWeekend = $currentTime->isWeekend();
                 $hour = $currentTime->hour;
 
-                // Simplified market hours (NYSE: 9:30 AM - 4:00 PM EST)
-                $isMarketHours = !$isWeekend && $hour >= 9 && $hour <= 16;
+                // Simplified market hours (metals market: generally 24/5)
+                $isMarketHours = !$isWeekend && $hour >= 0 && $hour <= 23;
 
                 return [
                     'status' => $isMarketHours ? 'open' : 'closed',
                     'last_updated' => $currentTime->toISOString(),
-                    'currency' => 'USD',
+                    'currency' => 'AUD',
                     'unit' => 'per ounce',
-                    'source' => 'MetalPriceAPI'
+                    'source' => 'metals-api.com'
                 ];
 
             } catch (\Exception $e) {
@@ -213,62 +215,12 @@ class KitcoApiService
                 return [
                     'status' => 'unknown',
                     'last_updated' => now()->toISOString(),
-                    'currency' => 'USD',
+                    'currency' => 'AUD',
                     'unit' => 'per ounce',
-                    'source' => 'Fallback Data'
+                    'source' => 'metals-api.com'
                 ];
             }
         });
-    }
-
-    /**
-     * Calculate price per gram for specific karat
-     */
-    public function calculatePricePerGram($karat)
-    {
-        $goldPricePerOz = $this->getCurrentGoldPrice();
-        $audRate = $this->getAudRate();
-        $gramsPerTroyOz = 31.1035;
-
-        // Convert to AUD per gram for 24K
-        $goldPricePerGramAud = ($goldPricePerOz * $audRate) / $gramsPerTroyOz;
-
-        // Extract numeric karat value
-        $karatValue = is_string($karat) ? (int)str_replace('K', '', $karat) : (int)$karat;
-
-        // Calculate price for given karat: Price(karat) = Price(24K) × (karat/24)
-        return round($goldPricePerGramAud * ($karatValue/24), 2);
-    }
-
-    /**
-     * Get price in AUD
-     */
-    public function getCurrentGoldPriceAUD()
-    {
-        $usdPrice = $this->getCurrentGoldPrice();
-        $audRate = $this->getAudRate();
-        return round($usdPrice * $audRate, 2);
-    }
-
-    /**
-     * Convert USD to AUD
-     */
-    public function convertToAUD($usdAmount)
-    {
-        $audRate = $this->getAudRate();
-        return round($usdAmount * $audRate, 2);
-    }
-
-    /**
-     * Refresh prices (force update)
-     */
-    public function refreshPrice()
-    {
-        Cache::forget($this->cacheKey . '_current');
-        Cache::forget($this->cacheKey . '_market_data');
-        Cache::forget('usd_aud_rate');
-
-        return $this->getCurrentGoldPrice();
     }
 
     /**
@@ -316,7 +268,7 @@ class KitcoApiService
 
             $difference = $currentPrice - $previousPrice;
 
-            if (abs($difference) < 5) {
+            if (abs($difference) < 50) { // Adjusted for AUD prices
                 return 'stable';
             } elseif ($difference > 0) {
                 return 'up';
@@ -337,7 +289,6 @@ class KitcoApiService
         Cache::forget($this->cacheKey . '_current');
         Cache::forget($this->cacheKey . '_market_data');
         Cache::forget($this->cacheKey . '_previous');
-        Cache::forget('usd_aud_rate');
 
         return true;
     }
@@ -345,15 +296,10 @@ class KitcoApiService
     /**
      * Get formatted price display
      */
-    public function getFormattedPrice($currency = 'USD')
+    public function getFormattedPrice($currency = 'AUD')
     {
-        if ($currency === 'AUD') {
-            $price = $this->getCurrentGoldPriceAUD();
-            return 'AUD'  . number_format($price, 2);
-        } else {
-            $price = $this->getCurrentGoldPrice();
-            return 'USD'  . number_format($price, 2);
-        }
+        $price = $this->getCurrentGoldPrice();
+        return 'AUD$' . number_format($price, 2);
     }
 
     /**
@@ -364,7 +310,6 @@ class KitcoApiService
         return [
             'current_price_cached' => Cache::has($this->cacheKey . '_current'),
             'market_data_cached' => Cache::has($this->cacheKey . '_market_data'),
-            'exchange_rate_cached' => Cache::has('usd_aud_rate'),
             'cache_ttl' => $this->cacheDuration,
             'last_updated' => $this->getLastUpdated()
         ];
@@ -382,79 +327,51 @@ class KitcoApiService
     }
 
     /**
-     * Get historical price data (simplified mock for now)
+     * Get current price for specific metal symbol
      */
-    public function getHistoricalPrices($days = 30)
-    {
-        // Generate mock historical data for demonstration
-        $prices = [];
-        $basePrice = $this->getCurrentGoldPrice();
-
-        for ($i = $days; $i >= 0; $i--) {
-            $date = now()->subDays($i);
-            $variation = (sin($i / 7) * 100) + (rand(-50, 50)); // Mock price variation
-            $price = round($basePrice + $variation, 2);
-
-            $prices[] = [
-                'date' => $date->format('Y-m-d'),
-                'price' => $price,
-                'change' => $i > 0 ? round($price - ($basePrice + (sin(($i-1) / 7) * 100)), 2) : 0
-            ];
-        }
-
-        return $prices;
-    }
-
     public function getCurrentPrice($symbol)
-{
-    try {
-        $metalPrices = $this->getCurrentMetalPrices();
-        
-        if (!isset($metalPrices[$symbol])) {
+    {
+        try {
+            $metalPrices = $this->getCurrentMetalPrices();
+
+            if (!isset($metalPrices[$symbol])) {
+                return [
+                    'success' => false,
+                    'error' => "Price not available for symbol: {$symbol}"
+                ];
+            }
+
+            return [
+                'success' => true,
+                'price' => $metalPrices[$symbol],
+                'symbol' => $symbol,
+                'timestamp' => $metalPrices['timestamp'] ?? time(),
+                'last_updated' => $metalPrices['last_updated'] ?? now()->toISOString()
+            ];
+
+        } catch (\Exception $e) {
+            Log::warning("Failed to get current price for {$symbol}: " . $e->getMessage());
+
             return [
                 'success' => false,
-                'error' => "Price not available for symbol: {$symbol}"
+                'error' => $e->getMessage()
             ];
         }
-        
-        return [
-            'success' => true,
-            'price' => $metalPrices[$symbol],
-            'symbol' => $symbol,
-            'timestamp' => $metalPrices['timestamp'] ?? time(),
-            'last_updated' => $metalPrices['last_updated'] ?? now()->toISOString()
-        ];
-        
-    } catch (\Exception $e) {
-        Log::warning("Failed to get current price for {$symbol}: " . $e->getMessage());
-        
-        // Return fallback price
-        $fallbackPrice = $this->fallbackPrices[$symbol] ?? 0;
-        
-        return [
-            'success' => true,
-            'price' => $fallbackPrice,
-            'symbol' => $symbol,
-            'timestamp' => time(),
-            'last_updated' => now()->toISOString(),
-            'fallback' => true
-        ];
     }
-}
 
-/**
- * Get exchange rate (alias for getAudRate for compatibility)
- * @return float
- */
-public function getExchangeRate()
-{
-    return $this->getAudRate();
-}
+    /**
+     * No exchange rate needed - already in AUD
+     */
+    public function getExchangeRate()
+    {
+        return 1.0;
+    }
 
-/**
- * Get current price for specific metal symbol (for compatibility with KitcoApiService)
- * @param string $symbol Metal symbol (XAU, XAG, XPD, XPT)
- * @return array
- */
-
+    /**
+     * Get AUD rate (always 1.0 since API returns AUD)
+     */
+    public function getAudRate()
+    {
+        return 1.0;
+    }
 }
